@@ -7125,6 +7125,32 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             UpdateDisposition::Parsed(Box::new(m))
         } else {
             match self.try_parse_voice_message(update).await {
+                UpdateDisposition::RetryTransient => {
+                    const MAX_VOICE_ATTEMPTS: u32 = 10;
+
+                    if let (Some(update_id), Some((tracked_id, previous_failures))) =
+                        (uid, *transient_retry)
+                    {
+                        if tracked_id == update_id && previous_failures >= MAX_VOICE_ATTEMPTS - 1 {
+                            ::zeroclaw_log::record!(
+                                WARN,
+                                ::zeroclaw_log::Event::new(
+                                    module_path!(),
+                                    ::zeroclaw_log::Action::Note
+                                )
+                                .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                                .with_attrs(::serde_json::json!({
+                                    "update_id": update_id,
+                                    "attempts": previous_failures.saturating_add(1),
+                                })),
+                                "Skipping Telegram voice update after reaching the retry limit"
+                            );
+                            *transient_retry = None;
+                            return UpdateOutcome::Advanced;
+                        }
+                    }
+                    return Self::pause_for_transient_update(uid, transient_retry).await;
+                }
                 UpdateDisposition::SkipPermanent => self.try_parse_attachment_message(update).await,
                 other => other,
             }
